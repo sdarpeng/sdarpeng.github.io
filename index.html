@@ -1,18 +1,529 @@
 <!DOCTYPE html>
-<html>
-<body>
+<html lang="en">
+	<head>
+		<title>NFT</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
 
-<form>
-First name:<br>
-<input type="text" name="firstname">
-<br>
-Last name:<br>
-<input type="text" name="lastname">
-</form>
+	<body>
+		<video id="video" loop muted crossOrigin="anonymous" playsinline style="display:none">
+<!-- 			<source src="video/ParticleIllusion.ogv"> -->
+			<source src="video/ParticleIllusion.mp4">
+		</video>
 
-<p>请注意表单本身是不可见的。</p>
+		<!-- Import maps polyfill -->
+		<!-- Remove this when import maps will be widely supported -->
+		<script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
 
-<p>同时请注意文本字段的默认宽度是 20 个字符。</p>
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "./lib/three.module.js",
+					"three/addons/": "./lib/"
+				}
+			}
+		</script>
 
-</body>
+		<script type="module">
+
+			//NFT Shoes Generator
+			//Author: Sdar Peng
+			//Date: Sept,28,2022
+            //点击New Shoe按钮生成新的随机序列；
+            //输入Serial Number并点击Resolve Serial Number可以加载特定的序列；
+			//点击Gen ColorMap按钮将按照当前的染色方案生成染色序列号；
+			//在ColorMap中粘贴染色序列号，并点击Resolve ColorMap可还原染色方案；
+
+			//若要使用webView引用本视口，请在iframe中添加样式frameborder = "0";
+			//<iframe src="http://127.0.0.1:5500/NFT.html" width="200" height="200" frameborder="0"></iframe>
+			
+			import * as THREE from 'three';
+			import { OrbitControls } from 'three/addons/OrbitControls.js';
+			import { GLTFLoader } from 'three/addons/GLTFLoader.js';
+			import { RGBELoader } from 'three/addons/RGBELoader.js';
+			import Stats from 'three/addons/stats.module.js';
+			import { GUI } from 'three/addons/lil-gui.module.min.js';
+			import { EffectComposer } from 'three/addons/EffectComposer.js';
+			import { RenderPass } from 'three/addons/RenderPass.js';
+			import { UnrealBloomPass } from 'three/addons/UnrealBloomPass.js';
+			import { OutlinePass } from 'three/addons/OutlinePass.js';
+
+			let camera, scene, renderer, controls, stats, serialValue, composer, bloomPass, shoeModel, bgTexture, panel, colorMapMonitor, outlinePass, selectedObject, selectedColor;
+			const params = {
+				exposure: .3,
+				bloomStrength: 1.5,
+				bloomThreshold: 0.64,
+				bloomRadius: 0.29
+			};			
+			var fileName = Math.round(Math.random()*99999);	
+
+			//若要关闭UI显示，将guivisible改为false;
+			var guiVisible = true;
+
+			
+
+			//材质贴图文件夹在material512/下，以01开头，最大支持99。添加完材质后，需根据材质数量修改下面的参数；
+			//系统只认如下命名的4张贴图：
+			//default_Base_color_1001.png
+			//default_Metallic_1001.png
+			//default_Normal_1001.png
+			//default_Roughness_1001.png
+			//请记得使用PNGOptmizer等工具优化PNG文件大小；
+			const part = {
+				'bottom': 4,
+				'cloth': 18,
+			}
+			//系统只认下述文件名的5个模型文件，若要添加更多模型，请按照如下格式添加；
+			const shoeModels = {
+				'walker' : 'walker.glb',
+				'jogger' : 'jogger.glb',
+				'racer' : 'racer.glb',
+				'trainer' : 'trainer.glb',
+				'cross-country' : 'cross-country.glb'
+			}			
+			//商用发布的时候，更改默认加载模型，只需要修改Shoe type的值里，对象shoeModels的索引，默认索引是'racer'；
+			const settings = {
+				'Shoe Type': shoeModels['racer'], //默认加载racer，可修改成其他模型；
+				'Serial Number': '17xx051503091017040202',
+				'New Shoe': randomMe,
+				'Resolve Serial Number': resolveSerial,
+				'Color': 0xffffff,
+				'PostProcessing' : false,
+				'save image': saveImage,
+				'clear bg' : false,
+				'Color Map' : 'ffffff',
+				'Gen ColorMap': genColorMap,
+				'Resolve ColorMap': resolveColorMap,
+				'selected' : '0xffffff'
+			};
+			var colorGroup = [];
+			var clothGroup = [];
+			var animaGroup = [];
+			var bottomGroup = [];
+			var colorGroupName = [];
+			let colorControlGroup = [];
+
+			const mouse = new THREE.Vector2();
+
+			init().catch( function ( err ) {
+				console.error( err );
+			} );
+			animate();
+
+			async function init() {
+				const container = document.createElement( 'div' );
+				document.body.appendChild( container );
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.25, 20 );
+				camera.position.set( 2, 1.3, 3 );
+				scene = new THREE.Scene();
+				const light = new THREE.PointLight( 0xffe26d, 1, 30 );
+				light.position.set( 2, 3, 0 );
+				scene.add( light );
+				const hemiLight = new THREE.HemisphereLight( 0xefdb8c, 0x536eb1, 0.4 );
+				hemiLight.position.set( -2, 2, 3 );
+				scene.add( hemiLight );
+				const dirLight = new THREE.DirectionalLight( 0xfffae4, 0.3 );
+				dirLight.position.set( 0, 5, 2.5 );
+				dirLight.castShadow = true;
+				scene.add( dirLight );
+				renderer = new THREE.WebGLRenderer( { antialias: true , alpha: true, preserveDrawingBuffer: true } );
+				renderer.setClearColor(0x999999, 0);
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.autoClear = true;
+				
+				renderer.toneMapping = THREE.ACESFilmicToneMapping;
+				renderer.toneMappingExposure = 1;
+
+				renderer.outputEncoding = THREE.sRGBEncoding;
+				container.appendChild( renderer.domElement );
+
+				const renderScene = new RenderPass( scene, camera );
+				bloomPass = new UnrealBloomPass( new THREE.Vector2( window.innerWidth, window.innerHeight ) );
+				bloomPass.threshold = params.bloomThreshold;
+				bloomPass.strength = params.bloomStrength;
+				bloomPass.radius = params.bloomRadius;
+
+				composer = new EffectComposer( renderer );
+				composer.addPass( renderScene );
+				outlinePass = new OutlinePass( new THREE.Vector2( window.innerWidth, window.innerHeight ), scene, camera );
+				outlinePass.edgeStrength = 5.0;
+				outlinePass.edgeGlow = .8;
+				outlinePass.edgeThickness = 3.5;
+				outlinePass.pulsePeriod = 1.0;
+				outlinePass.visibleEdgeColor.set( 0xff004c );
+				outlinePass.hiddenEdgeColor.set( 0x0a89ff );
+
+				composer.addPass( outlinePass );
+				composer.addPass( bloomPass );
+				console.log(composer);
+
+				const rgbeLoader = new RGBELoader()
+					.setPath( 'textures/' );
+				const [ texture ] = await Promise.all( [
+					rgbeLoader.loadAsync( '44TH_STREET.hdr' ),
+				] );
+
+				// environment
+				bgTexture = texture;
+				texture.mapping = THREE.EquirectangularReflectionMapping;
+				scene.background = texture;		
+				scene.environment = texture;
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.addEventListener( 'change', render ); // use if there is no animation loop
+				controls.minDistance = 2;
+				controls.target.set( 0, .5, 0 );
+				controls.enableDamping = true;
+				controls.enablePan = false;
+				controls.dampingFactor = .05;
+				controls.rotateSpeed = .9;
+				controls.maxDistance = 5;
+				controls.maxAzimuthAngle = Math.PI;
+				controls.minAzimuthAngle = - Math.PI;
+				controls.maxPolarAngle = Math.PI / 2;
+				controls.minPolarAngle = - Math.PI / 2;				
+				stats = new Stats();
+				modelLoader();
+				if ( guiVisible == true ){
+					container.appendChild( stats.dom );
+				}
+				window.addEventListener( 'resize', onWindowResize );
+				renderer.domElement.addEventListener( 'pointerdown', onPointerMove );
+			}
+
+
+			function createPanel() {
+				if(panel){
+					panel.destroy();
+				}
+				panel = new GUI( { width: 310 } );
+				if ( guiVisible == true ){
+					panel.show();
+				}else{ 
+					panel.hide();
+				}
+
+				//保存图片功能
+				const folder4 = panel.addFolder('保存图片');
+				folder4.add(settings, 'clear bg').onChange(function(value){
+					if(!value){
+						//开启后期效果后背景不能透明，若要强制开启后期效果，请注释掉本行代码；
+						settings['PostProcessing'] = true;
+						scene.background =  bgTexture;
+						PostController.updateDisplay();
+					}else{
+						//开启后期效果后背景不能透明，若要强制开启后期效果，请注释掉本行代码；
+						settings['PostProcessing'] = false;
+						scene.background = '';
+						PostController.updateDisplay();
+					}
+				});
+				folder4.add(settings, 'save image');
+
+				//后期面板
+				const folder3 = panel.addFolder('后期效果');
+				const PostController = folder3.add(settings, 'PostProcessing');
+				folder3.add( params, 'exposure', 0.1, 1 ).onChange( function ( value ) {
+					renderer.toneMappingExposure = Number( value );
+				} );
+				folder3.add( params, 'bloomThreshold', 0.0, 1.0 ).onChange( function ( value ) {
+					bloomPass.threshold = Number( value );
+				} );
+				folder3.add( params, 'bloomStrength', 0.0, 3.0 ).onChange( function ( value ) {
+					bloomPass.strength = Number( value );
+				});
+				folder3.add( params, 'bloomRadius', 0.0, 1.0 ).onChange( function ( value ) {
+					bloomPass.radius = Number( value );
+				});
+
+
+
+				//材质面板
+				const folder1 = panel.addFolder( '模型&材质' );
+				folder1.add(settings, 'Shoe Type' ,shoeModels  ).options(shoeModels).onChange( function () {
+					modelLoader( settings['Shoe Type']);
+				});
+				folder1.add( settings, 'New Shoe' );
+				serialValue = folder1.add( settings, 'Serial Number');
+				folder1.add( settings, 'Resolve Serial Number');
+
+				//材质染色面板
+				const folder2 = panel.addFolder('材质染色');
+				selectedColor = folder2.addColor(settings,'selected').name('selected').onChange(function(){
+					selectedObject.material.color.set(settings['selected']);
+					for(var i=0; i<colorControlGroup.length;i++){
+						colorControlGroup[i].updateDisplay();
+					}
+				});
+ 				for (var i = 0; i < colorGroupName.length ; i++){ 
+					settings['Color'] = 0xffffff;
+
+					const colorControl = folder2.addColor(settings,'Color').name(colorGroupName[i]);
+					colorControl.onChange( function(){
+					colorGroup[colorGroupName.indexOf(colorControl._name)].material.color.set( settings['Color'] );
+					});
+					colorControlGroup.push(colorControl);
+				}
+				folder2.add(settings, 'Gen ColorMap');
+				colorMapMonitor = folder2.add(settings, 'Color Map');
+				folder2.add(settings, 'Resolve ColorMap');
+			}
+
+
+			function onWindowResize() {
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				composer.setSize( window.innerWidth, window.innerHeight );
+				render();
+			}
+
+
+			function modelLoader(){
+				const loader = new GLTFLoader().setPath( 'model/' );
+				loader.load( settings['Shoe Type'], function ( gltf ) {
+					if ( shoeModel ) {
+						scene.remove( shoeModel );
+						colorGroup.length = 0;
+						colorGroupName.length = 0;
+					}
+					scene.add( gltf.scene );
+					gltf.scene.traverse( function( child ){
+						child.castShadow = true;
+						child.receiveShadow = true;
+						if( child.isMesh == true ){
+							if( child.name.search( 'cloth' ) != -1 ){						
+								clothGroup.push( child );
+							}else if( child.name.search( 'anima' ) != -1 ){
+								animaGroup.push( child );
+							}else if( child.name.search( 'bottom' ) != -1 ){
+								bottomGroup.push( child );
+							}
+							colorGroup.push( child );
+							colorGroupName.push( child.name );
+						}
+					})
+					sortColorGroup();
+					sortColorGroupName();
+					createPanel(); 
+					randomMe();
+					shoeModel = gltf.scene;
+				});
+			}
+
+			//获取当前的染色方案并编码；
+			function genColorMap(){
+				var colorMap ='';
+				for(var i=0; i<colorGroup.length; i++){
+					colorMap = colorMap.concat(colorGroup[i].material.color.getHexString());
+				}
+				settings['Color Map'] = colorMap;
+				colorMapMonitor.updateDisplay();
+
+			}
+
+			//解析染色方案
+			function resolveColorMap(){
+				for(var i = 0;i<colorGroup.length;i++){
+					var colorId = '0x' + settings['Color Map'].slice(i * 6 , i * 6 + 6);
+					colorGroup[i].material.color = new THREE.Color().setHex(colorId);
+				}
+			}
+
+			//自动随机材质并生成唯一的材质码；
+            function randomMe(){
+				var serial = '';
+				const video = document.getElementById( 'video' );
+				video.play();
+				const texture = new THREE.VideoTexture( video );
+				for( var i = 0; i < animaGroup.length; i++ ){
+					var r = Math.random();
+					if( r <= 0.2 ){
+						animaGroup[i].material.map = texture;
+						serial = serial.concat('xx');
+					}else{
+						var tex = part['cloth'];
+						tex = Math.round( Math.random() * (tex - 1) ) + 1;
+						tex = tex.toString(); 
+						var texId = padding( tex, 2);
+						serial = serial.concat( texId);
+						mapLoader( 'cloth', animaGroup[i], texId );
+					}
+				}
+
+				for (var i =0; i < clothGroup.length; i++ ){
+					var tex = part['cloth'];
+					tex = Math.round( Math.random() * (tex - 1) ) + 1;
+					tex = tex.toString(); 
+					var texId = padding( tex, 2);
+					serial = serial.concat( texId);
+					mapLoader( 'cloth', clothGroup[i], texId );
+				}
+
+				for (var i =0; i < bottomGroup.length; i++ ){
+					var tex = part['bottom'];
+
+					tex = Math.round( Math.random() * (tex - 1) ) + 1;
+
+					tex = tex.toString(); 
+					var texId = padding( tex, 2);
+
+					serial = serial.concat( texId);
+					mapLoader( 'bottom', bottomGroup[i], texId );
+				}
+				settings['Serial Number'] = serial ;
+                serialValue.updateDisplay();
+			}
+
+            function mapLoader( subPath, mesh, texId ){
+				var texId = padding( texId, 2 );
+				const texLoader = new THREE.TextureLoader();
+				texLoader.setPath('material512/' + subPath +'/' + texId +  '/');
+
+				//释放旧贴图；
+				if(mesh.material.map){
+					mesh.material.color.set(0xffffff);
+					mesh.material.map.dispose ();
+				}
+				if(mesh.material.metalnessMap){
+					mesh.material.metalnessMap.dispose();
+				}
+				if(mesh.material.normalMap){
+					mesh.material.normalMap.dispose();
+				}
+				if(mesh.material.roughnessMap){
+					mesh.material.roughnessMap.dispose();
+				}
+
+				texLoader.load('default_Base_color_1001.png', function( texture ){
+					mesh.material.map = texture;
+				});
+
+				texLoader.load('default_Metallic_1001.png', function( texture ){
+					mesh.material.metalness = 1;
+					mesh.material.metalnessMap = texture;
+				});
+
+				texLoader.load('default_Normal_1001.png', function( texture ){
+					mesh.material.normalMap = texture;
+				});
+
+				texLoader.load('default_Roughness_1001.png', function( texture ){
+					mesh.material.roughness = 1;
+					mesh.material.roughnessMap = texture;
+				});
+
+            }
+
+			function padding(num, length) {
+				if((num + "").length >= length) {
+				return num;
+				}
+				return padding("0" + num, length)
+			}
+
+			//解析材质码；
+			function resolveSerial(){
+				const video = document.getElementById( 'video' );
+				video.play();
+				const texture = new THREE.VideoTexture( video );
+
+				var serial = settings['Serial Number'];
+				
+				for( var i = 0; i < animaGroup.length; i++){
+					var texId = serial.slice( 2* i , 2 * i + 2 );
+					if(texId == 'xx'){
+						animaGroup[i].material.map = texture;
+					}else{
+						mapLoader( 'cloth', animaGroup[i], texId );
+					}
+				}
+
+				for( var i = 0; i < clothGroup.length; i++ ){
+					var texId = serial.slice( 2 * (i + animaGroup.length ) , 2 *(i + animaGroup.length ) + 2 );
+					mapLoader( 'cloth', clothGroup[i], texId );
+				}
+
+				for (var i =0; i < bottomGroup.length; i++ ){
+					var texId = serial.slice( 2 * (i + animaGroup.length  + clothGroup.length) , 2 *(i + animaGroup.length + clothGroup.length) + 2 );
+					mapLoader( 'bottom', bottomGroup[i], texId );
+				}
+			}
+
+			function render() {
+				renderer.render( scene, camera );
+			}
+
+			function animate() {
+				requestAnimationFrame( animate );
+				if(stats){
+					stats.update();
+				}
+
+				render();
+				if(controls){
+					controls.update();
+				}
+				//bloomPass.enabled =  settings['PostProcessing'];
+				outlinePass.enabled = settings['PostProcessing'];
+				composer.render();
+			}
+
+			function sortColorGroup() {
+				colorGroup.sort(function(a, b){
+					var x = a.name.toLowerCase();
+					var y = b.name.toLowerCase();
+					if (x < y) {return -1;}
+					if (x > y) {return 1;}
+					return 0;
+				});
+			}
+
+			function sortColorGroupName() {
+				colorGroupName.sort(function(a, b){
+					var x = a.toLowerCase();
+					var y = b.toLowerCase();
+					if (x < y) {return -1;}
+					if (x > y) {return 1;}
+					return 0;
+				});
+			}
+
+			function checkIntersection(){
+					const raycaster = new THREE.Raycaster();
+					raycaster.setFromCamera( mouse, camera );
+					const intersects = raycaster.intersectObject( scene, true );
+					if ( intersects.length > 0 ) {
+					selectedObject = intersects[ 0 ].object;
+					var selectedObjects = [];
+					selectedObjects.push( selectedObject );
+					outlinePass.selectedObjects = selectedObjects;
+					settings['selected'] = selectedObject.material.color.getHexString();
+					selectedColor.updateDisplay();
+				}
+			}
+
+			function onPointerMove( event ) {
+
+				if ( event.isPrimary === false ) return;
+					mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+					mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+					checkIntersection();
+			}
+
+			function saveImage() {
+				var link = document.createElement('a');
+				var canvas = renderer.domElement;
+				link.href = canvas.toDataURL("image/png");
+				link.download = fileName +'.png'; 
+				link.click(); 
+				fileName++;
+        	}
+
+		</script>
+
+	</body>
 </html>
